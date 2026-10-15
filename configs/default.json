@@ -1,0 +1,21 @@
+{
+  "seed": 0,
+  "cases": 120,
+  "sensors": 8,
+  "blocks": 8,
+  "snapshots": 64,
+  "sources": 2,
+  "snr_db": [
+    -5,
+    0,
+    5
+  ],
+  "dropout": 0.35,
+  "regularization": 0.001,
+  "shrinkage": 0.1,
+  "grid_step": 0.25,
+  "resolution_degrees": 2.0,
+  "catastrophic_degrees": 10.0,
+  "coverage": 0.8,
+  "solver": "CLARABEL"
+}
