@@ -4,52 +4,46 @@ Implementation of mask-sequence coarray likelihood inference and a local DOA rel
 
 ## Installation
 
-
-Use Python 3.11 or newer. Create and activate a virtual environment, then install:
+Use Python `>=3.11`. Run commands from the repository root. Create the environment, activate it with `source .venv/bin/activate` (Linux/macOS) or `.venv\Scripts\Activate.ps1` (PowerShell), then install the package.
 
 ```bash
 python -m venv .venv
 ```
 
-Activate with `source .venv/bin/activate` on Linux/macOS or `.venv\Scripts\Activate.ps1` in PowerShell, then install:
-
 ```bash
 python -m pip install -e .
-``` For GPU execution, install matching PyTorch and torchvision builds using the [PyTorch selector](https://pytorch.org/get-started/locally/).
+```
 
+## Data preparation
 
-## Data
-
-`mscl-doa prepare` generates independent complex Gaussian narrowband two-source array cases with recorded sensor masks. The default ULA uses half-wavelength spacing. To import array observations, provide a JSON list with `id`, `path`, `split` (val/test), optional `snr_db` and `source`; NPZ files contain complex `x` [block,sensor,snapshot], boolean `masks` [block,sensor], `positions` in wavelengths and reference `angles` in degrees. Inactive entries are never used. Imported files should store zeros there. Optional `full_x` enables the full-array oracle. Unequal block lengths can be represented by separate jobs with the current fixed-length archive format.
-
-[LOCATA](https://www.locata.lms.tf.fau.de/) recordings must first be converted to narrowband STFT snapshots with array coordinates scaled by frequency/sound speed. Keep recordings and source trajectories in one split. This adapter boundary avoids treating a broadband waveform as a narrowband covariance. The core `fit` function uses actual physical lags and never imposes Toeplitz structure on a nonuniform array.
+`prepare` generates independent complex Gaussian narrowband array cases with half-wavelength sensor spacing and recorded sensor masks. `--input manifest.json` instead accepts `{id,path,split}` records whose NPZ files contain complex `x` [block,sensor,snapshot], `masks`, wavelength-unit `positions` and degree-unit `angles`; preserve recording groups across val/test.
 
 ```bash
 mscl-doa prepare --data data/arrays
+```
+
+## Training and execution
+
+`configs/default.json` records seed `0`. Keep it fixed across paired methods and use separate output directories.
+
+```bash
 mscl-doa calibrate --data data/arrays --output checkpoints
 mscl-doa run --data data/arrays --calibration checkpoints/calibration.json --output runs
+```
+
+## Comparisons and ablations
+
+`--method` selects the implemented method or component control. Train separate checkpoints where applicable. `compare` executes the array estimators on the same cases.
+
+```bash
 mscl-doa compare --data data/arrays --calibration checkpoints/calibration.json --output runs
 mscl-doa plot --output runs
 ```
 
-## Likelihood and controls
+## Outputs
 
-Each block supplies its available covariance entries and a shrinkage estimate of the proper-complex Gaussian covariance law `Omega = R ⊗ conj(R)`, in row-major vector order. Snapshot-weighted correlated WLS is solved over complex physical-lag variables with conjugate symmetry and a PSD covariance on the physical array. A shared MUSIC grid uses the declared source count. Source powers/noise are fitted by nonnegative least squares; nuisance-profiled information supplies the minimum-positive-eigenvalue/mean-trace score. Information rank is reported alongside that relative-conditioning score.
+The explicit run directories contain `cases.csv`, `metrics.json`. Comparisons write CSV/JSON and plots derived from those saved measurements.
 
-Controls are common-survivor MUSIC, pair-count weighting, diagonal block precision, and a stronger-regularized structured completion objective. `full_oracle` requires true full observations. The pair-count and diagonal controls preserve the same PSD solve and MUSIC stage, isolating precision use. There is no neural FCN training stage in this estimator; `calibrate` freezes a score threshold using validation quality quantiles and the desired coverage.
+## Verification
 
-## Settings and results
-
-`configs/default.json` controls simulation seed, sensors, masks, blocks, snapshots, SNR grid, source count, shrinkage, regularization, MUSIC resolution, failure/resolution tolerances and CVXPY solver. CLARABEL is the default PSD-capable solver. `run` writes per-case `cases.csv` and aggregate `metrics.json`. Metrics include permutation-matched RMSE/MAE, resolution probability, catastrophic/failure rate, lag coverage, information quality/rank, AURC, calibrated coverage and measured runtime per block. A survivor run with too few sensors is an explicit failure assigned 90-degree error. Solver failures remain errors.
-
-Use identical `x` and altered mask archives for repeated/complementary same-duty controls, and identical masks with altered block noise/snapshot count for precision controls. Aggregate rates use [0,1]. Per-SNR results can be read from `cases.csv`; overall RMSE pools squared angular errors rather than averaging case RMSE. Comparison CSV/JSON and PNG/SVG charts use measured values.
-
-## Multiple seeds
-
-Run matched configurations with different seeds in separate directories, then aggregate the generated metric files:
-
-```bash
-mscl-doa-report --inputs runs/seed0/metrics.json runs/seed1/metrics.json --output outputs/seeds
-```
-
-Use actual metric paths from your runs, including method subdirectories where applicable. Keep dataset, split and experimental condition fixed within a report. Summary CSV/JSON gives per-method arithmetic means and sample standard deviations; a single run has no standard-deviation estimate.
+Source checks used Python 3.13.5. Installed dependency metadata: numpy 2.1.3, scipy 1.15.3, matplotlib 3.10.0. Python AST, configuration files, CLI parser definitions and source input/output paths were checked without invoking command handlers. Training, full evaluation and CI were not run for this review.
