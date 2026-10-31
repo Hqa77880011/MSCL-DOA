@@ -131,7 +131,7 @@ def reliability(lag_state, lags, information, angles):
     k = len(angles)
     profiled = (
         fisher[:k, :k]
-        - fisher[:k, k:] @ np.linalg.pinv(fisher[k:, k:]) @ fisher[k:, :k]
+        - fisher[:k, k:] @ np.linalg.pinv(fisher[k:, k:], rcond=1e-9) @ fisher[k:, :k]
     )
     eigen = np.linalg.eigvalsh((profiled + profiled.T) / 2)
     positive = eigen[eigen > max(eigen.max(initial=0) * 1e-9, 1e-12)]

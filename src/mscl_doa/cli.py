@@ -6,20 +6,46 @@ from .common import load, save, table, plot
 from .core import fit, steering, music, matched_error
 
 
+def matched_masks(sensors, blocks, schedule):
+    """Equal active count and per-sensor uptime; only pair co-observation changes."""
+    if blocks % sensors or sensors < 4 or sensors % 2:
+        raise ValueError("Matched schedules require even sensors >=4 and blocks divisible by sensors")
+    base = np.zeros(sensors, dtype=bool)
+    if schedule == "pair_poor":
+        base[::2] = True
+    elif schedule == "pair_complementary":
+        base[:sensors // 2] = True
+    else:
+        raise ValueError(schedule)
+    return np.stack([np.roll(base, b % sensors) for b in range(blocks)])
+
+
 def prepare(a, c):
     root = Path(a.data)
     root.mkdir(parents=True, exist_ok=True)
     if a.input:
         source = load(a.input)
         records = []
+        groups = {}
         for record in source:
+            group = str(record.get("group", record["id"]))
+            if group in groups and groups[group] != record["split"]:
+                raise ValueError("Recording group crosses splits")
+            groups[group] = record["split"]
             path = Path(record["path"])
             path = path if path.is_absolute() else Path(a.input).parent / path
+            raw = np.load(path)
+            if raw["x"].ndim != 3 or raw["masks"].shape != raw["x"].shape[:2]:
+                raise ValueError("Expected x [block,sensor,snapshot] and matching masks")
+            if len(raw["positions"]) != raw["x"].shape[1]:
+                raise ValueError("Array coordinate count does not match sensor count")
             records.append(dict(record, path=str(path.resolve())))
     else:
         rng = np.random.default_rng(c["seed"])
         records = []
         positions = np.arange(c["sensors"]) / 2
+        schedule = getattr(a, "schedule", "random")
+        fixed_masks = None if schedule == "random" else matched_masks(c["sensors"], c["blocks"], schedule)
         for i in range(c["cases"]):
             angles = np.sort(rng.uniform(-55, 55, c["sources"]))
             snr = float(c["snr_db"][i % len(c["snr_db"])])
@@ -39,7 +65,8 @@ def prepare(a, c):
                     * np.sqrt(c["sources"] * 10 ** (-snr / 10))
                 )
                 blocks.append(steering(positions, angles) @ signals + noise)
-                mask = rng.random(c["sensors"]) >= c["dropout"]
+                mask = (rng.random(c["sensors"]) >= c["dropout"]
+                        if fixed_masks is None else fixed_masks[b].copy())
                 if mask.sum() < 2:
                     mask[:2] = True
                 masks.append(mask)
@@ -58,6 +85,7 @@ def prepare(a, c):
                     split="val" if i < c["cases"] // 5 else "test",
                     snr_db=snr,
                     source="generated_narrowband_array",
+                    schedule=schedule,
                 )
             )
     save(root / "manifest.json", records)
@@ -171,6 +199,7 @@ def main():
     )
     p.add_argument("--config", default="configs/default.json")
     p.add_argument("--input")
+    p.add_argument("--schedule", choices=["random", "pair_poor", "pair_complementary"], default="random")
     p.add_argument("--data", default="data/arrays")
     p.add_argument("--output", default="runs")
     p.add_argument(
