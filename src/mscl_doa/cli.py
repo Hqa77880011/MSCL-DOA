@@ -95,6 +95,9 @@ def infer(record, c, method, predictor=None):
     x = data["x"]
     masks = data["masks"]
     positions = data["positions"]
+    if method == "tqn_th":
+        from . import tqn_th
+        return tqn_th.infer(data, c)
     if method == "fcn":
         from . import fcn
         return fcn.infer(data, c, predictor if predictor is not None else fcn.restore(c["fcn_checkpoint"]))
@@ -172,6 +175,16 @@ def evaluate(a, c, method, split="test"):
                 runtime_per_block_ms=1000 * elapsed / len(load_case(record["path"])["x"]),
             )
         )
+        if method == "tqn_th" and "diagnostics" in result:
+            diagnostic = result["diagnostics"]
+            rows[-1].update(virtual_sensors=result["virtual_sensors"],
+                            solver_iterations=diagnostic["iterations"],
+                            solver_converged=diagnostic["converged"],
+                            projection_converged=diagnostic["projection_converged"],
+                            primal_residual=diagnostic["primal_residual"],
+                            toeplitz_residual=diagnostic["toeplitz_residual"],
+                            minimum_eigenvalue=diagnostic["minimum_eigenvalue"],
+                            tqn_alpha=diagnostic["alpha"])
     if not rows:
         raise ValueError("No records for selected split")
     threshold = load(a.calibration)["threshold"] if a.calibration else None
@@ -217,6 +230,7 @@ def main():
             "diagonal",
             "pair_count",
             "completion",
+            "tqn_th",
             "blockwise",
             "fcn",
             "survivor",
@@ -251,7 +265,7 @@ def main():
     elif a.command == "compare":
         rows = [
             evaluate(a, c, m)[0]
-            for m in ["survivor", "blockwise", "pair_count", "diagonal", "completion", "mscl"] + (["fcn"] if c.get("fcn_checkpoint") else [])
+            for m in ["survivor", "blockwise", "pair_count", "diagonal", "completion", "tqn_th", "mscl"] + (["fcn"] if c.get("fcn_checkpoint") else [])
         ]
         save(Path(a.output) / "comparison.json", rows)
         table(Path(a.output) / "comparison.csv", rows)
