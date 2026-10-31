@@ -89,8 +89,11 @@ def fit(x, masks, positions, c, method="mscl"):
         variable[k] == cp.conj(variable[np.searchsorted(lags, -lag)])
         for k, lag in enumerate(lags)
     ]
-    regularizer = cp.sum_squares(cp.abs(variable))
-    penalty = c["regularization"] * (10 if method == "completion" else 1)
+    # For PSD matrices the nuclear norm equals the trace: this is genuine
+    # structured low-rank completion, rather than changing a WLS ridge weight.
+    regularizer = (cp.real(cp.trace(physical)) if method == "completion"
+                   else cp.sum_squares(cp.abs(variable)))
+    penalty = c.get("completion_weight", c["regularization"]) if method == "completion" else c["regularization"]
     problem = cp.Problem(cp.Minimize(sum(terms) + penalty * regularizer), constraints)
     problem.solve(solver=c["solver"])
     if (
@@ -141,6 +144,33 @@ def reliability(lag_state, lags, information, angles):
         else 0.0
     )
     return quality, len(positive)
+
+
+def blockwise_music(blocks, masks, positions, c):
+    """Snapshot-weighted, normalized block MUSIC spectra on the common grid."""
+    spectra, weights = [], []
+    observed = np.zeros((len(positions), len(positions)), bool)
+    for values, mask in zip(blocks, masks):
+        ids = np.flatnonzero(mask)
+        if len(ids) <= c["sources"]:
+            continue
+        selected = values[ids]
+        covariance = selected @ selected.conj().T / selected.shape[1]
+        _, grid, spectrum = music(covariance, np.asarray(positions)[ids], c["sources"], c["grid_step"])
+        spectra.append(spectrum / max(spectrum.max(), 1e-12))
+        weights.append(selected.shape[1])
+        observed[np.ix_(ids, ids)] = True
+    if not spectra:
+        raise ValueError("No block has enough surviving sensors")
+    spectrum = np.average(spectra, axis=0, weights=weights)
+    peaks = find_peaks(spectrum, distance=max(1, int(1 / c["grid_step"])))[0]
+    if len(peaks) < c["sources"]:
+        peaks = np.arange(len(grid))
+    chosen = peaks[np.argsort(spectrum[peaks])[-c["sources"]:]]
+    lags = np.round(np.asarray(positions)[:, None] - np.asarray(positions)[None, :], 8)
+    return dict(angles=np.sort(grid[chosen]), quality=float(spectrum[chosen].min()),
+                information_rank=c["sources"], grid=grid, spectrum=spectrum,
+                lag_coverage=len(np.unique(lags[observed])) / len(np.unique(lags)))
 
 
 def matched_error(prediction, truth):

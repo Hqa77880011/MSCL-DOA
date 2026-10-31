@@ -3,7 +3,8 @@ import time
 from pathlib import Path
 import numpy as np
 from .common import load, save, table, plot
-from .core import fit, steering, music, matched_error
+from .core import fit, steering, music, matched_error, blockwise_music
+from .data import load_case
 
 
 def matched_masks(sensors, blocks, schedule):
@@ -34,11 +35,7 @@ def prepare(a, c):
             groups[group] = record["split"]
             path = Path(record["path"])
             path = path if path.is_absolute() else Path(a.input).parent / path
-            raw = np.load(path)
-            if raw["x"].ndim != 3 or raw["masks"].shape != raw["x"].shape[:2]:
-                raise ValueError("Expected x [block,sensor,snapshot] and matching masks")
-            if len(raw["positions"]) != raw["x"].shape[1]:
-                raise ValueError("Array coordinate count does not match sensor count")
+            load_case(path)
             records.append(dict(record, path=str(path.resolve())))
     else:
         rng = np.random.default_rng(c["seed"])
@@ -82,7 +79,9 @@ def prepare(a, c):
                 dict(
                     id=str(i),
                     path=str(path.resolve()),
-                    split="val" if i < c["cases"] // 5 else "test",
+                    split=("train" if i < int(c["cases"] * c.get("training_fraction", 0.))
+                           else "val" if i < int(c["cases"] * c.get("training_fraction", 0.)) + max(1, c["cases"] // 5)
+                           else "test"),
                     snr_db=snr,
                     source="generated_narrowband_array",
                     schedule=schedule,
@@ -91,19 +90,22 @@ def prepare(a, c):
     save(root / "manifest.json", records)
 
 
-def infer(record, c, method):
-    data = np.load(record["path"])
+def infer(record, c, method, predictor=None):
+    data = load_case(record["path"])
     x = data["x"]
     masks = data["masks"]
     positions = data["positions"]
+    if method == "fcn":
+        from . import fcn
+        return fcn.infer(data, c, predictor if predictor is not None else fcn.restore(c["fcn_checkpoint"]))
     if method == "full_oracle":
-        if "full_x" not in data and not record.get("source", "").startswith(
+        if not data["full_x"] and not record.get("source", "").startswith(
             "generated"
         ):
             raise ValueError("full_oracle requires full_x")
-        full = data["full_x"] if "full_x" in data else x
+        full = data["full_x"] if data["full_x"] else x
         covariance = sum(b @ b.conj().T for b in full) / (
-            full.shape[0] * full.shape[-1]
+            sum(b.shape[1] for b in full)
         )
         angles, grid, spectrum = music(
             covariance, positions, c["sources"], c["grid_step"]
@@ -111,6 +113,8 @@ def infer(record, c, method):
         return dict(
             angles=angles, quality=1.0, lag_coverage=1.0, information_rank=c["sources"]
         )
+    if method == "blockwise":
+        return blockwise_music(x, masks, positions, c)
     if method == "survivor":
         common = np.all(masks, axis=0)
         if common.sum() <= c["sources"]:
@@ -132,17 +136,21 @@ def infer(record, c, method):
 def evaluate(a, c, method, split="test"):
     records = [r for r in load(Path(a.data) / "manifest.json") if r["split"] == split]
     rows = []
+    predictor = None
+    if method == "fcn":
+        from .fcn import restore
+        predictor = restore(c["fcn_checkpoint"])
     for record in records:
         start = time.perf_counter()
         try:
-            result = infer(record, c, method)
+            result = infer(record, c, method, predictor)
             errors = matched_error(result["angles"], np.load(record["path"])["angles"])
             error = float(np.sqrt(np.mean(errors**2)))
             mae = float(np.mean(errors))
             maximum = float(max(errors))
             failed = False
         except ValueError as exc:
-            if str(exc) != "Too few common surviving sensors":
+            if str(exc) not in ("Too few common surviving sensors", "No block has enough surviving sensors"):
                 raise
             result = dict(angles=[], quality=0.0, lag_coverage=0.0, information_rank=0)
             error = mae = maximum = 90.0
@@ -161,7 +169,7 @@ def evaluate(a, c, method, split="test"):
                 quality=result["quality"],
                 information_rank=result["information_rank"],
                 lag_coverage=result["lag_coverage"],
-                runtime_per_block_ms=1000 * elapsed / len(np.load(record["path"])["x"]),
+                runtime_per_block_ms=1000 * elapsed / len(load_case(record["path"])["x"]),
             )
         )
     if not rows:
@@ -195,7 +203,7 @@ def evaluate(a, c, method, split="test"):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument(
-        "command", choices=["prepare", "calibrate", "run", "compare", "plot"]
+        "command", choices=["prepare", "train_fcn", "calibrate", "run", "compare", "plot"]
     )
     p.add_argument("--config", default="configs/default.json")
     p.add_argument("--input")
@@ -209,16 +217,24 @@ def main():
             "diagonal",
             "pair_count",
             "completion",
+            "blockwise",
+            "fcn",
             "survivor",
             "full_oracle",
         ],
         default="mscl",
     )
     p.add_argument("--calibration")
+    p.add_argument("--checkpoint")
     a = p.parse_args()
     c = load(a.config)
+    if a.checkpoint:
+        c["fcn_checkpoint"] = a.checkpoint
     if a.command == "prepare":
         prepare(a, c)
+    elif a.command == "train_fcn":
+        from .fcn import train
+        train(a.data, a.output, c)
     elif a.command == "calibrate":
         _, rows = evaluate(a, c, a.method, "val")
         save(
@@ -235,7 +251,7 @@ def main():
     elif a.command == "compare":
         rows = [
             evaluate(a, c, m)[0]
-            for m in ["survivor", "pair_count", "diagonal", "completion", "mscl"]
+            for m in ["survivor", "blockwise", "pair_count", "diagonal", "completion", "mscl"] + (["fcn"] if c.get("fcn_checkpoint") else [])
         ]
         save(Path(a.output) / "comparison.json", rows)
         table(Path(a.output) / "comparison.csv", rows)

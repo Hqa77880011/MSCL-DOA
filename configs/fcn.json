@@ -1,0 +1,28 @@
+{
+  "seed": 0,
+  "cases": 1000,
+  "sensors": 12,
+  "blocks": 12,
+  "snapshots": 64,
+  "sources": 2,
+  "snr_db": [
+    -5,
+    0,
+    5
+  ],
+  "dropout": 0.35,
+  "regularization": 0.001,
+  "shrinkage": 0.1,
+  "grid_step": 0.25,
+  "resolution_degrees": 2.0,
+  "catastrophic_degrees": 10.0,
+  "coverage": 0.8,
+  "solver": "CLARABEL",
+  "training_fraction": 0.7,
+  "fcn_epochs": 200,
+  "fcn_width": 64,
+  "fcn_batch_size": 32,
+  "fcn_lr": 0.0001,
+  "fcn_max_lr": 0.01,
+  "fcn_grid_step": 1.0
+}

@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26,<3", "scipy>=1.11,<2", "matplotlib>=3.8,<4", "cvxpy>=1.5,<2"]
 
+[project.optional-dependencies]
+fcn = ["torch>=2.4,<3"]
+
 [project.scripts]
 mscl-doa-report = "mscl_doa.common:report"
 mscl-doa = "mscl_doa.cli:main"
