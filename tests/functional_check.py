@@ -45,6 +45,19 @@ def main():
     np.testing.assert_allclose(matched_error([10, -10], [-12, 11]), [1, 2])
     covariance = steering(np.arange(4) / 2, [20])
     assert covariance.shape == (4, 1)
+    # Exercise the two-DOA nuisance Schur complement, not only its scalar limit.
+    rng = np.random.default_rng(19)
+    positions = np.arange(6) / 2
+    truth = np.array([-20., 24.])
+    blocks = []
+    for _ in range(2):
+        source = (rng.normal(size=(2, 32)) + 1j * rng.normal(size=(2, 32))) / np.sqrt(2)
+        noise = .01 * (rng.normal(size=(6, 32)) + 1j * rng.normal(size=(6, 32)))
+        blocks.append(steering(positions, truth) @ source + noise)
+    double = fit(np.stack(blocks), np.ones((2, 6), dtype=bool), positions,
+                 dict(c, sources=2, grid_step=1.))
+    assert double["information_rank"] == 2 and np.isfinite(double["quality"])
+    assert matched_error(double["angles"], truth).max() <= 1
     poor = cli.matched_masks(8, 8, "pair_poor")
     complementary = cli.matched_masks(8, 8, "pair_complementary")
     np.testing.assert_array_equal(poor.sum(0), complementary.sum(0))
