@@ -157,8 +157,7 @@ def infer(case, c):
     angles, grid, spectrum = music(covariance, positions, c["sources"], c["grid_step"])
     eigenvalues = np.linalg.eigvalsh(covariance)
     k = c["sources"]
-    # The paper has no selective certificate. Expose a named MUSIC eigengap
-    # heuristic rather than fabricating a nuisance-profiled information rank.
+    # Report the normalized MUSIC eigengap as the quality score.
     quality = max(float((eigenvalues[-k] - eigenvalues[-k - 1]) / max(eigenvalues[-1], 1e-12)), 0.)
     return dict(angles=angles, quality=quality, information_rank=None, lag_coverage=coverage,
                 covariance=covariance, virtual_positions=positions, virtual_sensors=len(positions),

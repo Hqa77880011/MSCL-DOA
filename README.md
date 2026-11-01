@@ -1,6 +1,6 @@
 # MSCL-DOA
 
-Implementation of mask-sequence coarray likelihood inference and a local DOA reliability score.
+Mask-sequence coarray likelihood inference and a local DOA reliability score.
 
 ## Installation
 
@@ -44,13 +44,9 @@ mscl-doa plot --output runs
 
 The explicit run directories contain `cases.csv`, `metrics.json`. Comparisons write CSV/JSON and plots derived from those saved measurements.
 
-## Verification
-
-Run `python tests/functional_check.py` after installing dependencies. This inference-only seed-0 CPU check creates five generated horizons, solves the constrained complex covariance problem, checks Hermitian/PSD output, calibrates a threshold only on validation horizons, evaluates every available estimator, verifies saved calibration loading, checks angular assignment by hand, and checks exact per-sensor uptime/active-count equality and identical full-array samples for matched schedules. A separate six-sensor two-source case verifies both DOA estimates and rank-two nuisance-profiled information. Passed with Python 3.13.5, numpy 2.1.3, scipy 1.15.3, cvxpy 1.9.3, CLARABEL 0.11.1 and qdldl 0.1.9.post1. In the Windows verification environment the last three packages were installed in an ignored repository-local dependency directory, without modifying shared packages. Temporary outputs are generated under ignored `runs/functional-check/`. This does not establish simulation-table or LOCATA performance. No neural training is required by the MSCL estimator.
-
 ## Method and metric entry points
 
-| Paper object | Entry point | Configuration or command |
+| Component | Entry point | Configuration or command |
 |---|---|---|
 | Mask-specific covariance and proper-complex error precision | `src/mscl_doa/core.py:observations` | `shrinkage`; `x`, `masks` |
 | Shared physical-lag WLS with conjugate symmetry and physical-array PSD | `core.fit` | `regularization`, `solver`; `mscl-doa run` |
@@ -68,7 +64,7 @@ mscl-doa prepare --config configs/default.json --schedule pair_complementary --d
 
 The matched generator requires even sensor count and a block count divisible by the sensor count. It cyclically shifts an alternating mask or contiguous half-array mask; both have identical active count, per-sensor uptime, union sensors and full-array signal/noise draws, but different pair co-observation. `dropout` applies only to `--schedule random`.
 
-`completion` now solves a genuine structured PSD covariance-completion objective with physical-lag conjugate tying and trace/nuclear-norm regularization, rather than multiplying the MSCL ridge by ten. `blockwise` averages snapshot-weighted normalized MUSIC spectra from surviving subarrays. These controls have their own objectives. The local MSCL score remains a conditioning descriptor and is interpreted alongside information rank.
+`completion` solves structured PSD covariance completion with conjugate physical-lag tying and trace/nuclear-norm regularization. `blockwise` averages snapshot-weighted normalized MUSIC spectra from surviving subarrays. Interpret the MSCL conditioning score alongside information rank.
 
 ## Variable snapshots, measured audio and FCN
 
@@ -84,7 +80,7 @@ mscl-doa prepare --input data/measured/manifest.json --data data/arrays
 mscl-doa run --method blockwise --data data/arrays --output runs/blockwise
 ```
 
-`src/mscl_doa/fcn.py` implements the time-varying-array proxy-spectrum FCN described by [Dai et al., IEICE 2025](https://globals.ieice.org/en_transactions/communications/10.23919/transcom.2024EBP3103/_f): jointly observed off-diagonal covariance proxy B^H r; real/imaginary/phase channels; length-preserving kernel-31 convolution/BN/ReLU; shallow/deep concatenation skips; sigmoid grid classification trained with BCE, Adam and OneCycleLR. This is a clean implementation with explicit configurable widths, rather than author-provided pretrained code. `fcn_width` defaults to 64; the exact published parameter count is not asserted.
+`src/mscl_doa/fcn.py` implements the proxy-spectrum FCN from [Dai et al., IEICE 2025](https://globals.ieice.org/en_transactions/communications/10.23919/transcom.2024EBP3103/_f): jointly observed off-diagonal covariance proxy B^H r; real/imaginary/phase channels; kernel-31 convolution/BN/ReLU; shallow/deep skips; and sigmoid grid classification with BCE, Adam and OneCycleLR. `fcn_width` defaults to 64.
 
 ```bash
 mscl-doa prepare --config configs/fcn.json --data data/fcn
@@ -92,21 +88,19 @@ mscl-doa train_fcn --config configs/fcn.json --data data/fcn --output checkpoint
 mscl-doa run --config configs/fcn.json --method fcn --checkpoint checkpoints/fcn/fcn.pt --data data/fcn --output runs/fcn
 ```
 
-The supplied FCN config generates independent labelled training horizons before held-out validation/test and sets the paper's primary 12 sensors. Its training split is explicit (`training_fraction`); training refuses validation/test-only data. The FCN defaults to 200 epochs for real experiments; the functional check overrides one epoch and width eight. Network loading occurs before measured inference runtime.
+The FCN config uses 12 sensors and independent labelled training horizons before validation/test. `training_fraction` controls the training split; `epochs` defaults to 200. Network loading precedes inference timing.
 
-`python tests/protocol_check.py` passed original generated multichannel WAV and native LOCATA pose/source TSV conversion with a 90-degree array rotation, unequal block snapshots [6,9,10], MSCL/completion/blockwise/full-oracle angular errors at most one degree, and actual FCN training, checkpoint reload and held-out evaluation. `tests/functional_check.py` also passed PSD, nuisance-rank and equal-duty schedule regressions. No full FCN training or LOCATA benchmark experiment was run.
+## TQN-TH structured completion
 
-## Published TQN-TH structured completion
-
-`src/mscl_doa/tqn_th.py` independently implements [Wu et al., *Robust DOA Estimation for Sparse Arrays under Sensor Failures via Structured Matrix Completion* (2025)](https://link.springer.com/article/10.1007/s11760-025-04544-3), DOI `10.1007/s11760-025-04544-3`. The full original HTML, Equations (16)–(34), Section 4 parameters and the complete [Algorithm 1 image](https://link.springer.com/article/10.1007/s11760-025-04544-3/figures/a) were read through legitimate East China Normal University institutional access on 2026-11-01. This implementation does not depend on author code or redistribute the article.
+`src/mscl_doa/tqn_th.py` implements truncated quadratic nuclear-norm completion from [Wu et al., Robust DOA Estimation for Sparse Arrays under Sensor Failures via Structured Matrix Completion](https://link.springer.com/article/10.1007/s11760-025-04544-3), DOI `10.1007/s11760-025-04544-3`.
 
 The objective uses the truncated quadratic nuclear penalty `sum(min(alpha * sigma_i**2, 1))`. Each iteration executes the printed intermediate update (22), the piecewise TQN-SVT (24), alternating paired-diagonal Toeplitz/Hermitian projection (28) and eigenvalue-floor PSD projection (30), the multiplier update (33), and the stated relative stopping tests. Known entries, including known zero values, initialize each lag; missing lag entries initialize to zero. `completion` remains the separate trace-regularized baseline.
 
-Two details of the original equations are preserved explicitly. Equation (17) defines `tau=sqrt(1/alpha)`, whereas a Section 4 sentence says `tau=1/alpha`; the implementation follows Equation (17). Equation (22) uses the zero-filled observation matrix across the whole update, including outside the observation mask. The code implements that printed expression literally and does not claim that this expression is an exact minimizer of the preceding masked subproblem. The original PSD floor uses the epsilon symbol also used for the outer tolerance; `tqn_psd_floor` defaults to that tolerance and can be declared separately.
+The SVT threshold is `tau=sqrt(1/alpha)`. The intermediate update uses the zero-filled observation matrix over the whole matrix, including entries outside the mask. `tqn_psd_floor` defaults to the outer tolerance and can be configured separately.
 
-`configs/tqn_th.json` fixes the Section 4 settings `mu=.01`, `rho=3`, maximum 200 outer iterations, outer tolerance `1e-4`, maximum 10 projection iterations, projection tolerance `1e-6`, numerical denominator epsilon `1e-8`, and `alpha=.03`. The paper additionally uses `alpha=.008` at low SNR. Select and freeze alpha in the experiment configuration before evaluation; it is never chosen from test errors or hidden test labels. The supplied config covers the main paper's 12-sensor, 8-block uniform-array experiment. It does not recreate Wu's simulation sweep automatically.
+`configs/tqn_th.json` sets `mu=.01`, `rho=3`, 200 outer iterations, outer tolerance `1e-4`, 10 projection iterations, projection tolerance `1e-6`, denominator epsilon `1e-8` and `alpha=.03`. Use a prespecified configuration to select alpha, including `.008` for low-SNR settings, before evaluation. The default array has 12 sensors and 8 blocks.
 
-Wu's original input has a fixed incomplete coarray. The mask-sequence adapter pools only actually observed sensor-pair covariances at the same physical lag, weighted by each block's snapshot count, before running the original algorithm on one incomplete virtual ULA covariance. Physical positions must lie on the explicitly declared uniform grid (`tqn_grid_spacing=.5` wavelength by default); sparse gaps and a translation of the array are supported. Coordinate-perturbed or measured off-grid geometries are rejected rather than silently snapped. The virtual ULA has one element per grid coordinate over the full physical aperture: Wu's 8-sensor nested array has 20 virtual elements. The repository's common known-source-count MUSIC stage then operates on those virtual positions.
+The mask-sequence adapter pools observed sensor-pair covariances by physical lag, weighted by block snapshot count, into an incomplete virtual ULA covariance. Positions must lie on the configured grid (`tqn_grid_spacing=.5` wavelength by default); sparse gaps and translations are supported. The virtual array spans the full aperture, with one element per grid coordinate. Known-source-count MUSIC operates on those virtual positions.
 
 ```bash
 mscl-doa prepare --config configs/tqn_th.json --data data/tqn
@@ -115,8 +109,14 @@ mscl-doa run --config configs/tqn_th.json --method tqn_th --data data/tqn --cali
 python tests/tqn_th_check.py
 ```
 
-The original method has no selective certificate. Its `quality` here is the named normalized MUSIC eigengap heuristic, calibrated on validation horizons, and its `information_rank` is blank rather than an invented MSCL information rank. Per-case CSV records virtual array size, outer iterations, both convergence flags, primal residual, Toeplitz residual, minimum eigenvalue and alpha. Reaching an iteration cap is reported, including when the last PSD projection still has a nonzero Toeplitz residual.
+TQN-TH `quality` is a normalized MUSIC eigengap calibrated on validation horizons; `information_rank` is blank. Per-case CSV records virtual array size, outer iterations, convergence flags, primal/Toeplitz residuals, minimum eigenvalue and alpha, including iteration-cap outcomes.
 
-`tests/tqn_th_check.py` passed on CPU with one numerical thread: hand-checkable complex diagonal averaging and PSD clipping; both branches of TQN-SVT; known-zero initialization; the literal Equation (22) outside the observation mask; snapshot-weighted ragged pooling; exclusion of hidden invalid sensor samples; invalid-grid rejection; and analytic two-source MUSIC errors `[0,0]` degrees. Held-out calibration and CSV/JSON evaluation on six independently generated horizons (one validation, five test) gave test RMSE `0.2923839280` degrees, resolution `1.0`, validation-threshold coverage `0.6`, and five of five converged outer solves. The original MSCL functional check also passed after this integration. These are functionality checks, not a benchmark estimate.
+## Checks
 
-The original nested-array geometry was additionally exercised with five surviving sensors at positions `[1,3,5,15,20]*d`, three sources `[-20,10,50]` degrees and 500 snapshots. This fixture uses unit-power independent sources, noise variance three and the repository's 0 dB total-signal-power SNR convention; the source article does not specify its SNR normalization. The literal published updates converged in four iterations with primal residual `8.16e-6`, Toeplitz residual `2.37e-7` and minimum eigenvalue `1e-4`; the three matched errors were `[0.5,23.25,0.25]` degrees. Thus this check verifies the original geometry and finite constrained output but does not reproduce the paper's reported resolution performance. No full simulation sweep or LOCATA benchmark was run.
+Generated fixtures check data handling, metrics and checkpoint loading. On Windows with separate MKL/OpenMP runtimes, set `$env:MKL_THREADING_LAYER='SEQUENTIAL'` in the active PowerShell process.
+
+```bash
+python tests/functional_check.py
+python tests/protocol_check.py
+python tests/tqn_th_check.py
+```
